@@ -1,0 +1,21 @@
+# Microsoft Agent Framework
+agent-framework-core
+agent-framework-foundry
+
+# Microsoft Agent Governance Toolkit
+agent-governance-toolkit[full]
+
+# Azure authentication
+azure-identity
+
+# API service
+fastapi
+uvicorn[standard]
+
+# Configuration
+python-dotenv
+pydantic-settings
+
+# Testing
+pytest
+pytest-asyncio

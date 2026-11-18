@@ -1,0 +1,103 @@
+agent_control_specification_version: "0.3.1-beta"
+
+metadata:
+  name: agent_governance
+  version: "0.2.0"
+
+extends: []
+
+policies:
+  agent_governance:
+    type: rego
+    bundle: ./policy
+    query: data.agent_control_specification.agent_governance.verdict
+
+intervention_points:
+
+  input:
+    policy_target_kind: user_input
+    policy_target: "$.input.body"
+    policy:
+      id: agent_governance
+      query: data.agent_control_specification.agent_governance.input_verdict
+
+  pre_tool_call:
+    policy_target_kind: tool_args
+    policy_target: "$.tool_call.args"
+    tool_name_from: "$.tool_call.name"
+    policy:
+      id: agent_governance
+      query: data.agent_control_specification.agent_governance.pre_tool_call_verdict
+
+  output:
+    policy_target_kind: final_output
+    policy_target: "$.output"
+    policy:
+      id: agent_governance
+      query: data.agent_control_specification.agent_governance.output_verdict
+
+  post_tool_call:
+    policy_target_kind: tool_result
+    policy_target: "$.tool_result"
+    tool_name_from: "$.tool_call.name"
+    policy:
+      id: agent_governance
+      query: data.agent_control_specification.agent_governance.post_tool_call_verdict
+
+tools:
+  get_balance:
+    type: Tool
+    id: get_balance
+    security_labels:
+      - account-data
+
+  get_customer_details:
+    type: Tool
+    id: get_customer_details
+    security_labels:
+      - customer-data
+
+  calculate_transfer:
+    type: Tool
+    id: calculate_transfer
+    security_labels:
+      - financial
+      - calculation
+
+  transfer_money:
+    type: Tool
+    id: transfer_money
+    security_labels:
+      - financial
+      - high-impact
+      - mutation
+
+  update_customer:
+    type: Tool
+    id: update_customer
+    security_labels:
+      - customer-data
+      - mutation
+
+  send_email:
+    type: Tool
+    id: send_email
+    security_labels:
+      - external-communication
+
+  delete_customer:
+    type: Tool
+    id: delete_customer
+    security_labels:
+      - customer-data
+      - destructive
+
+
+
+  apply_for_loan:
+    type: Tool
+    id: apply_for_loan
+    security_labels:
+      - financial
+      - high-impact
+      - mutation
