@@ -69,8 +69,12 @@ def manual_kill(body: dict, x_demo_reviewer_secret: str | None = Header(default=
     if type(body.get("killed")) is not bool:
         raise HTTPException(status_code=400, detail="killed must be a boolean")
     from governance.persistence.kill_repository import set_manual_kill
+    import logging
     try:
-        return set_manual_kill(body["killed"], "poc-demo-reviewer")
+        result = set_manual_kill(body["killed"], "poc-demo-reviewer")
+        logging.warning("GOVERNANCE_MANUAL_KILL reviewer=%s requested=%s effective=%s",
+                        "poc-demo-reviewer", body["killed"], result["killed"])
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 
@@ -98,11 +102,15 @@ async def decision(
 
     try:
         agent = create_hosted_agent()
-        return await agent.resolve_approval(
+        result = await agent.resolve_approval(
             request_id,
             decision_map[body.decision],
             "poc-demo-reviewer",
         )
+        import logging
+        logging.warning("GOVERNANCE_APPROVAL_DECISION request_id=%s decision=%s outcome=%s reviewer=%s",
+                        request_id, body.decision, result.get("status"), "poc-demo-reviewer")
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except Exception:
