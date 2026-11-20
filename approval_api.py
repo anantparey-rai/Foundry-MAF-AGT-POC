@@ -79,4 +79,6 @@ async def decision(
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except Exception:
+        import logging
+        logging.exception("APPROVAL_EXECUTION_FAILED")
         raise HTTPException(status_code=500, detail="Governed approval execution failed")
