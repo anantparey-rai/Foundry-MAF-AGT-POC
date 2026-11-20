@@ -1,7 +1,9 @@
-﻿from dataclasses import dataclass
+﻿import json
+from dataclasses import dataclass
 from threading import RLock
 from typing import Any
 from uuid import uuid4
+from governance.persistence import approval_repository as repo
 
 
 @dataclass
@@ -35,39 +37,64 @@ def create_pending(intervention_point, result) -> PendingApproval:
         reason=result.verdict.reason,
     )
 
-    with _LOCK:
-        _PENDING[item.request_id] = item
-
+    repo.create_approval(vars(item))
     return item
 
 
 def get_pending_request(request_id: str):
-    with _LOCK:
-        return _PENDING.get(request_id)
+    record = repo.get_approval(request_id)
+    if not record:
+        return None
+    if "policy_input_json" not in record:
+        raise ValueError("Approval missing canonical policy input")
+    record["policy_input"] = json.loads(
+        record["policy_input_json"],
+        parse_float=float,
+    )
+    record["arguments"] = dict(
+        record["policy_input"]["snapshot"]["tool_call"]["args"]
+    )
+    return PendingApproval(**{
+        k: record[k] for k in PendingApproval.__dataclass_fields__
+        if k in record
+    })
 
 
 def list_pending():
-    with _LOCK:
-        return [item for item in _PENDING.values() if item.status == "pending"]
+    approvals = []
+    for record in repo.list_pending_approvals():
+        data = dict(record)
+        if "policy_input_json" in data:
+            data["policy_input"] = json.loads(data["policy_input_json"])
+        if "policy_input" not in data:
+            raise ValueError("Missing policy_input for approval " + str(data.get("request_id")))
+        approvals.append(PendingApproval(**{
+            k: data[k] for k in PendingApproval.__dataclass_fields__
+            if k in data
+        }))
+    return approvals
 
 
-def set_decision(request_id: str, decision: str) -> bool:
+def set_decision(
+    request_id: str, decision: str, reviewer: str
+) -> bool:
     if decision not in ("allow", "deny"):
         raise ValueError("Decision must be allow or deny")
 
-    with _LOCK:
-        item = _PENDING.get(request_id)
-        if item is None or item.status != "pending":
-            return False
-        item.status = decision
-        return True
+    if not reviewer or not reviewer.strip():
+        raise ValueError("Verified reviewer identity is required")
+
+    return repo.transition_approval(
+        request_id, "pending", decision, reviewer=reviewer
+    )
 
 
 def consume_pending(request_id: str):
-    with _LOCK:
-        return _PENDING.pop(request_id, None)
+    raise NotImplementedError(
+        "Durable approval finalization requires execution-state handling"
+    )
 
-from agent_control_specification import ApprovalOutcome, ApprovalResolution
+from agent_control_specification import ApprovalOutcome, ApprovalResolution, action_identity
 
 
 def create_approval_resolver(resume_request_id: str | None = None):
@@ -82,7 +109,13 @@ def create_approval_resolver(resume_request_id: str | None = None):
 
         item = get_pending_request(resume_request_id)
 
-        if item is None or item.action_identity != result.action_identity:
+        if (
+            item is None
+            or not item.action_identity
+            or not result.action_identity
+            or item.action_identity != result.action_identity
+            or item.action_identity != action_identity(item.policy_input)
+        ):
             return ApprovalResolution(ApprovalOutcome.DENY)
 
         if item.status == "allow":

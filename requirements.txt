@@ -1,21 +1,24 @@
 # Microsoft Agent Framework
-agent-framework-core
-agent-framework-foundry
+agent-framework-core==1.26.0
+agent-framework-foundry==1.16.2
+agent-framework-foundry-hosting==1.0.0b261112
 
 # Microsoft Agent Governance Toolkit
-agent-governance-toolkit[full]
+agent-governance-toolkit[full]==4.1.0
+agent-control-specification==0.3.1b1
 
 # Azure authentication
-azure-identity
+azure-identity==1.27.0
 
 # API service
 fastapi
 uvicorn[standard]
 
 # Configuration
-python-dotenv
+python-dotenv==1.2.4
 pydantic-settings
 
 # Testing
 pytest
 pytest-asyncio
+azure-cosmos==4.17.1

@@ -6,6 +6,7 @@ from azure.identity import DefaultAzureCredential
 from agent_framework import Agent
 from agent_framework.foundry import FoundryChatClient
 from governance.kill_switch import AutomaticRingBreachKillSwitch
+from governance.persistence.kill_repository import is_agent_killed
 
 from agent_control_specification import (
     AgentControl,
@@ -28,7 +29,7 @@ load_dotenv()
 class GovernedMAFAgent:
 
     def __init__(self):
-        endpoint = os.getenv("AZURE_AI_PROJECT_ENDPOINT")
+        endpoint = os.getenv("AZURE_AI_PROJECT_ENDPOINT") or os.getenv("FOUNDRY_PROJECT_ENDPOINT") or "https://foundrypoc2.services.ai.azure.com/api/projects/POC-proj"
         model = os.getenv("AZURE_AI_MODEL_DEPLOYMENT_NAME", "gpt-41-mini")
 
         if not endpoint:
@@ -62,7 +63,15 @@ class GovernedMAFAgent:
                 "Never claim that a financial action was completed "
                 "unless its tool execution actually succeeded. "
                 "If a tool call is interrupted for approval, do not "
-                "claim success or attempt to bypass governance."
+                "claim success or attempt to bypass governance. "
+                "When a user explicitly requests an operation and provides "
+                "all required tool parameters, invoke the corresponding "
+                "registered tool rather than merely describing an action. "
+                "Read-only tools do not require human approval under the "
+                "current policy. High-impact tools are governed by ACS. "
+                "Only report an approval as submitted when the tool returns "
+                "ACTION_PENDING_HUMAN_APPROVAL. Never execute an action "
+                "outside its registered tool."
             ),
             tools=self.tools,
             middleware=[self.kill_switch_middleware],
@@ -77,9 +86,32 @@ class GovernedMAFAgent:
 
         @wraps(function)
         async def governed_tool(**kwargs):
-            result = await protected(kwargs)
-            return result.value
+            try:
+                result = await protected(kwargs)
+                return result.value
+            except AgentControlSuspended as exc:
+                return (
+                    "ACTION_PENDING_HUMAN_APPROVAL: The requested action "
+                    "has been suspended by ACS. No tool action was executed. "
+                    "An authorized reviewer must approve or reject it. "
+                    f"Details: {exc}"
+                )
 
+        hitl_tools = {
+            "transfer_money", "update_customer", "send_email",
+            "delete_customer", "apply_for_loan",
+        }
+        governed_tool.__doc__ = (
+            f"Execute {name} using its required parameters. "
+            + (
+                "This is a high-impact action. Invoke this tool to submit "
+                "the action to ACS for mandatory human approval. "
+                "Never claim approval was submitted without invoking the tool."
+                if name in hitl_tools else
+                "This is a read-only or calculation operation. "
+                "Human approval is not required by the current ACS policy."
+            )
+        )
         return governed_tool
 
     async def run(self, message):
@@ -89,7 +121,7 @@ class GovernedMAFAgent:
         )
         return result.value
 
-    async def resolve_approval(self, request_id, decision):
+    async def resolve_approval(self, request_id, decision, reviewer):
         if decision not in ("allow", "deny"):
             raise ValueError("Decision must be allow or deny")
 
@@ -98,18 +130,75 @@ class GovernedMAFAgent:
         if item is None:
             raise ValueError("Pending approval not found")
 
-        if not set_decision(request_id, decision):
+        if not set_decision(request_id, decision, reviewer):
             raise ValueError("Approval request is no longer pending")
 
         tool_name = item.tool_name
+
+        if decision == "deny":
+            return {
+                "status": "denied",
+                "tool": tool_name,
+            }
+
         function = TOOL_FUNCTIONS[tool_name]
 
         tool_call = item.policy_input["snapshot"]["tool_call"]
         tool_call_id = tool_call.get("id")
 
+        def execute_approved_tool(args):
+            from governance.persistence.approval_repository import (
+                claim_execution,
+                finalize_execution,
+            )
+
+            from hypervisor.models import ExecutionRing
+
+            governance = self.kill_switch_middleware
+            elevation = None
+
+            if not claim_execution(request_id):
+                raise RuntimeError(
+                    "Approval already claimed or no longer authorized"
+                )
+
+            try:
+                if governance.terminated.is_set() or is_agent_killed():
+                    raise RuntimeError("AGT kill switch: agent terminated")
+
+                elevation = governance.elevation_manager.request_elevation(
+                    agent_did=governance.agent_did,
+                    session_id=f'approval-{request_id}',
+                    current_ring=ExecutionRing.RING_3_SANDBOX,
+                    target_ring=ExecutionRing.RING_1_PRIVILEGED,
+                    ttl_seconds=30,
+                    attestation=item.action_identity,
+                    trust_score=0.85,
+                    reason=f"ACS HITL approved: {request_id}",
+                )
+
+                governance.enforce_tool(tool_name, approved_execution=True, session_id=f'approval-{request_id}')
+                result = function(**args)
+            except BaseException:
+                finalize_execution(request_id, succeeded=False)
+                raise
+            finally:
+                if elevation is not None:
+                    governance.elevation_manager.revoke_elevation(
+                        elevation.elevation_id
+                    )
+
+            if not finalize_execution(request_id, succeeded=True):
+                raise RuntimeError(
+                    "Tool executed but approval finalization failed; "
+                    "manual reconciliation required"
+                )
+
+            return result
+
         protected = self.acs.protect_tool(
             tool_name,
-            lambda args: function(**args),
+            execute_approved_tool,
             approval_resolver=create_approval_resolver(request_id),
         )
 
@@ -118,8 +207,6 @@ class GovernedMAFAgent:
                 item.arguments,
                 tool_call_id=tool_call_id,
             )
-            consume_pending(request_id)
-
             return {
                 "status": "executed",
                 "tool": tool_name,
@@ -127,13 +214,14 @@ class GovernedMAFAgent:
             }
 
         except AgentControlBlocked:
-            consume_pending(request_id)
+            from governance.persistence.approval_repository import get_approval
 
-            if decision == "deny":
-                return {
-                    "status": "denied",
-                    "tool": tool_name,
-                }
+            record = get_approval(request_id)
+            if record and record.get("status") == "executed":
+                raise RuntimeError(
+                    "Tool executed, but ACS post-tool enforcement blocked "
+                    "the result. Manual reconciliation required."
+                )
 
             raise
 

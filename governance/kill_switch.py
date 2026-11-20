@@ -1,4 +1,5 @@
-﻿import threading
+import threading
+from governance.persistence.kill_repository import is_agent_killed, persist_kill
 
 from agent_framework import (
     FunctionMiddleware,
@@ -25,7 +26,7 @@ class AutomaticRingBreachKillSwitch(FunctionMiddleware):
         self.eff_score = 0.40
         self.detector = RingBreachDetector(
             window_seconds=60,
-            baseline_rate=0.01,
+            baseline_rate=1.0,
         )
 
         self.kill_switch = KillSwitch()
@@ -41,11 +42,26 @@ class AutomaticRingBreachKillSwitch(FunctionMiddleware):
             "calculate_transfer",
         }
 
-    async def process(self, context: FunctionInvocationContext, call_next):
-        if self.terminated.is_set():
+    def enforce_tool(self, tool_name: str, approved_execution: bool = False, session_id: str = None):
+        session_id = session_id or self.session_id
+        if self.terminated.is_set() or is_agent_killed():
             raise MiddlewareFailure("AGT kill switch: agent terminated.")
 
-        tool_name = context.function.name
+        if self.detector.is_breaker_tripped(
+            self.agent_did, session_id
+        ):
+            details = "AGT ring-breach breaker already tripped"
+            persist_kill("RING_BREACH", details)
+            self.kill_switch.kill(
+                self.agent_did,
+                session_id,
+                KillReason.RING_BREACH,
+                details=details,
+            )
+            raise MiddlewareFailure(
+                f"AGT automatic kill activated: {details}"
+            )
+
         action = ActionDescriptor(
             action_id=tool_name,
             name=tool_name,
@@ -56,33 +72,17 @@ class AutomaticRingBreachKillSwitch(FunctionMiddleware):
         target_ring = self.classifier.classify(action).ring
         agent_ring = self.elevation_manager.get_effective_ring(
             self.agent_did,
-            self.session_id,
+            session_id,
             self.base_ring,
         )
 
-        breach = self.detector.record_call(
-            self.agent_did,
-            self.session_id,
-            agent_ring,
-            target_ring,
-        )
-
-        if self.detector.is_breaker_tripped(
-            self.agent_did,
-            self.session_id,
-        ):
-            details = breach.details if breach else "AGT ring-breach breaker tripped."
-            try:
-                self.kill_switch.kill(
-                    self.agent_did,
-                    self.session_id,
-                    KillReason.RING_BREACH,
-                    details=details,
-                )
-            except Exception as exc:
-                raise MiddlewareFailure("AGT kill-switch execution failed.") from exc
-
-            raise MiddlewareFailure(f"AGT automatic kill activated: {details}")
+        # High-impact tools enter ACS only to create a HITL request.
+        # Actual execution is separately governed in resolve_approval().
+        if not approved_execution and tool_name in {
+            "transfer_money", "update_customer", "send_email",
+            "delete_customer", "apply_for_loan",
+        }:
+            return
 
         enforcement = self.enforcer.check(
             agent_ring=agent_ring,
@@ -91,8 +91,50 @@ class AutomaticRingBreachKillSwitch(FunctionMiddleware):
         )
 
         if not enforcement.allowed:
+            if approved_execution:
+                details = f"Unauthorized ring execution: {tool_name}; {enforcement.reason}"
+                persist_kill("RING_BREACH", details)
+                self.kill_switch.kill(
+                    self.agent_did, session_id,
+                    KillReason.RING_BREACH, details=details
+                )
+                raise MiddlewareFailure(f"AGT automatic kill activated: {details}")
             raise MiddlewareFailure(
                 f"AGT RingEnforcer denied {tool_name}: {enforcement.reason}"
             )
 
+
+        # Do not interpret legitimate same-ring bursts as ring breaches.
+        # RingEnforcer has already validated this action.
+        if target_ring == agent_ring:
+            return
+
+        breach = self.detector.record_call(
+            self.agent_did,
+            session_id,
+            agent_ring,
+            target_ring,
+        )
+
+        if self.detector.is_breaker_tripped(
+            self.agent_did,
+            session_id,
+        ):
+            details = breach.details if breach else "AGT ring-breach breaker tripped."
+            try:
+                persist_kill("RING_BREACH", details)
+                self.kill_switch.kill(
+                    self.agent_did,
+                    session_id,
+                    KillReason.RING_BREACH,
+                    details=details,
+                )
+            except Exception as exc:
+                raise MiddlewareFailure("AGT kill-switch execution failed.") from exc
+
+            raise MiddlewareFailure(f"AGT automatic kill activated: {details}")
+
+
+    async def process(self, context: FunctionInvocationContext, call_next):
+        self.enforce_tool(context.function.name)
         await call_next()
