@@ -69,6 +69,8 @@ jobs:
           PY
       - name: Validate ACS HITL runtime with mock tool
         run: python scripts/test_acs_hitl_runtime.py
+      - name: Validate hosted source readiness and OPA bootstrap
+        run: python scripts/check_hosted_readiness.py
       - name: Validate OPA bundling inputs
         run: |
           test -x tools/opa
