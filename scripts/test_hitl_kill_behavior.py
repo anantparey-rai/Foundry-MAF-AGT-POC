@@ -53,6 +53,7 @@ container = Container()
 scope = {
     "get_approvals_container": lambda: container,
     "AGENT_ID": AGENT_ID,
+    "STATE_ID": "kill-switch-state",
     "exceptions": exceptions,
     "MatchConditions": MatchConditions,
     "datetime": datetime,
