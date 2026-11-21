@@ -65,6 +65,8 @@ jobs:
 
           asyncio.run(test())
           PY
+      - name: Validate ACS HITL runtime with mock tool
+        run: python scripts/test_acs_hitl_runtime.py
       - name: Validate OPA bundling inputs
         run: |
           test -x tools/opa
