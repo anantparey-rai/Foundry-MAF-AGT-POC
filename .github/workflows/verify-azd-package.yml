@@ -18,6 +18,8 @@ jobs:
         with:
           python-version: "3.12"
       - uses: Azure/setup-azd@v2
+      - name: Install Foundry agents azd extension for CI
+        run: azd extension install azure.ai.agents --source azd
       - name: Provision pinned OPA before packaging
         run: bash scripts/prepare_opa.sh
       - name: Prepare isolated azd environment (no Azure deployment)
