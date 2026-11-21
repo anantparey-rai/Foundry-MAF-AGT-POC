@@ -53,8 +53,10 @@ def method(name):
     return next(n for n in CLASS.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name)
 
 def calls_named(node, name):
-    return any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == name
-               for n in ast.walk(node))
+    return any(isinstance(n, ast.Call) and (
+        (isinstance(n.func, ast.Attribute) and n.func.attr == name) or
+        (isinstance(n.func, ast.Name) and n.func.id == name)
+    ) for n in ast.walk(node))
 
 assert calls_named(method("_create_governed_tool"), "validate_tool_call"), "Tool wrapper missing validation"
 assert calls_named(method("resolve_approval"), "validate_tool_call"), "Approval replay missing validation"
