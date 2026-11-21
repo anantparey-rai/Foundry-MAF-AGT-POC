@@ -12,7 +12,7 @@ from governance.approval.store import list_pending
 logger = logging.getLogger(__name__)
 
 
-def _blocked_response(exc: AgentControlBlocked) -> AgentResponse:
+def _blocked_response(exc: Exception) -> AgentResponse:
     # Do not expose raw policy internals or the rejected prompt to the caller.
     logger.warning("GOVERNANCE_POLICY_BLOCKED %s", json.dumps({
         "event": "governance_policy_blocked",
@@ -154,6 +154,8 @@ class GovernedHostedAgent:
     async def _run_non_stream(
         self, body, session, function_invocation_kwargs, client_kwargs, options
     ):
+        if not self.governed.screen_input(body):
+            return _blocked_response(PermissionError("AGT input governance denied"))
         async def execute(effective_input):
             return await self.agent.run(
                 effective_input["body"],
@@ -172,6 +174,12 @@ class GovernedHostedAgent:
     async def _run_stream(
         self, body, session, function_invocation_kwargs, client_kwargs, options
     ):
+        if not self.governed.screen_input(body):
+            blocked = _blocked_response(PermissionError("AGT input governance denied"))
+            async def empty_stream():
+                if False:
+                    yield None
+            return ResponseStream(empty_stream(), finalizer=lambda _: blocked)
         updates = []
 
         async def execute(effective_input):
