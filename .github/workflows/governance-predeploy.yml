@@ -29,6 +29,8 @@ jobs:
         run: bash scripts/prepare_opa.sh
       - name: Validate OPA policy syntax
         run: tools/opa check --strict governance/policies/acs/policy/policy.rego
+      - name: Run OPA governance policy regression matrix
+        run: python scripts/test_governance_policy.py
       - name: Install ACS dependency
         run: python -m pip install agent-control-specification==0.3.1b1
       - name: Validate ACS runtime policy enforcement
