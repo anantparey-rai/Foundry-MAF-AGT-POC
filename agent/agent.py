@@ -1,6 +1,8 @@
 ﻿import os
 import json
 import logging
+import math
+import inspect
 
 from agent_os.prompt_injection import PromptInjectionDetector, DetectionConfig
 from functools import wraps
@@ -84,6 +86,23 @@ class GovernedMAFAgent:
             middleware=[self.kill_switch_middleware],
         )
 
+    @staticmethod
+    def validate_tool_call(name, function, arguments):
+        """ASI02: reject unknown/invalid tool calls before ACS and on approval replay."""
+        if name not in TOOL_FUNCTIONS or TOOL_FUNCTIONS[name] is not function:
+            raise PermissionError("ASI02: tool is not registered")
+        if not isinstance(arguments, dict):
+            raise ValueError("ASI02: tool arguments must be an object")
+        inspect.signature(function).bind(**arguments)
+        for key, value in arguments.items():
+            if isinstance(value, str) and (not value.strip() or len(value) > 4096):
+                raise ValueError(f"ASI02: invalid {key}")
+            if key in {"amount", "loan_amount"}:
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                    raise ValueError(f"ASI02: invalid {key}")
+            if key == "loan_term_months" and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
+                raise ValueError("ASI02: invalid loan term")
+
     def _create_governed_tool(self, name, function):
         protected = self.acs.protect_tool(
             name,
@@ -96,6 +115,7 @@ class GovernedMAFAgent:
             if self.kill_switch_middleware.terminated.is_set() or is_agent_killed():
                 raise RuntimeError("AGT kill switch: agent terminated")
             try:
+                self.validate_tool_call(name, function, kwargs)
                 result = await protected(kwargs)
                 return result.value
             except AgentControlSuspended as exc:
@@ -174,6 +194,7 @@ class GovernedMAFAgent:
             }
 
         function = TOOL_FUNCTIONS[tool_name]
+        self.validate_tool_call(tool_name, function, item.arguments)
 
         tool_call = item.policy_input["snapshot"]["tool_call"]
         tool_call_id = tool_call.get("id")
