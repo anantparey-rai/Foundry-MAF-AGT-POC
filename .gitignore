@@ -38,3 +38,6 @@ htmlcov/
 .DS_Store
 Thumbs.db
 .azure
+
+# OPA binary is provisioned by scripts/prepare_opa.sh before deployment
+/tools/opa
