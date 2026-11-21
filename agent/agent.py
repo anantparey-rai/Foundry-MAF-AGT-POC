@@ -1,4 +1,8 @@
 ﻿import os
+import json
+import logging
+
+from agent_os.prompt_injection import PromptInjectionDetector, DetectionConfig
 from functools import wraps
 
 from dotenv import load_dotenv
@@ -24,6 +28,7 @@ from governance.approval.store import (
 
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 
 class GovernedMAFAgent:
@@ -36,6 +41,8 @@ class GovernedMAFAgent:
             raise ValueError(
                 "AZURE_AI_PROJECT_ENDPOINT is missing from environment"
             )
+
+        self.prompt_injection_detector = PromptInjectionDetector(DetectionConfig(sensitivity="balanced"))
 
         self.acs = AgentControl.from_path(
             "governance/policies/acs/manifest.yaml"
@@ -116,7 +123,25 @@ class GovernedMAFAgent:
         )
         return governed_tool
 
+    def screen_input(self, message):
+        """AGT LLM01 detection, with explicit fail-closed enforcement (also ASI01 signal)."""
+        try:
+            result = self.prompt_injection_detector.detect(message, source="foundry_hosted_input")
+            blocked = bool(result.is_injection)
+            logger.warning("AGT_PROMPT_INJECTION %s", json.dumps({
+                "blocked": blocked,
+                "threat_level": result.threat_level.value,
+                "injection_type": result.injection_type.value if result.injection_type else None,
+                "confidence": result.confidence,
+            })) if blocked else None
+            return not blocked
+        except Exception:
+            logger.exception("AGT_PROMPT_INJECTION detector unavailable; fail closed")
+            return False
+
     async def run(self, message):
+        if not self.screen_input(message):
+            raise PermissionError("Request blocked by AGT prompt injection governance")
         if self.kill_switch_middleware.terminated.is_set() or is_agent_killed():
             raise RuntimeError("AGT kill switch: agent terminated")
         result = await self.acs.run(
