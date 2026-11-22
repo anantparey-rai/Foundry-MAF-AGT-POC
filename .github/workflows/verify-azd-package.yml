@@ -5,11 +5,16 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   package:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -18,13 +23,22 @@ jobs:
       - uses: Azure/setup-azd@v2
       - name: Install Foundry agents azd extension for CI
         run: azd extension install azure.ai.agents --source azd
+      - name: Validate Azure OIDC configuration
+        shell: bash
+        run: |
+          test -n "$AZURE_CLIENT_ID" || { echo "Missing AZURE_CLIENT_ID repository secret"; exit 1; }
+          test -n "$AZURE_TENANT_ID" || { echo "Missing AZURE_TENANT_ID repository secret"; exit 1; }
+          test -n "$AZURE_SUBSCRIPTION_ID" || { echo "Missing AZURE_SUBSCRIPTION_ID repository secret"; exit 1; }
+      - name: Authenticate azd using GitHub OIDC
+        shell: bash
+        run: azd auth login --client-id "$AZURE_CLIENT_ID" --tenant-id "$AZURE_TENANT_ID" --federated-credential-provider github
       - name: Provision pinned OPA before packaging
         run: bash scripts/prepare_opa.sh
       - name: Prepare isolated azd environment (no Azure deployment)
         shell: bash
         run: |
           azd env new ci-package-check --no-prompt
-          azd env set AZURE_SUBSCRIPTION_ID 00000000-0000-0000-0000-000000000000
+          azd env set AZURE_SUBSCRIPTION_ID "$AZURE_SUBSCRIPTION_ID"
           azd env set AZURE_AI_MODEL_DEPLOYMENT_NAME gpt-41-mini
       - name: Build Foundry package using azd (no deployment)
         shell: bash
