@@ -48,20 +48,3 @@ async def recovery_route(request: Request):
     # terminated in-memory agent. Stop all hosted replicas first.
     return JSONResponse({"error": "Online recovery intentionally disabled: stop the hosted workload and perform audited offline recovery before restarting"}, status_code=409)
 
-async def _unused_offline_recovery_route(request: Request):
-    """Reserved for offline-only maintenance; not registered as a route."""
-    try:
-        body = await request.json()
-        reviewer, reason = body.get("reviewer"), body.get("reason")
-        if not isinstance(reviewer, str) or not isinstance(reason, str):
-            return JSONResponse({"error": "reviewer and reason required"}, status_code=400)
-        recover_agent(reviewer=reviewer, reason=reason)
-        return JSONResponse({
-            "status": "restart_required", "durable_kill_cleared": True,
-            "message": "Restart hosted agents and revalidate governance before resuming traffic",
-        }, status_code=202)
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=409)
-    except Exception as exc:
-        print("AGT_RECOVERY_ERROR", type(exc).__name__, flush=True)
-        return JSONResponse({"error": "Recovery failed"}, status_code=500)
