@@ -45,35 +45,3 @@ def persist_kill(reason, details=None):
             continue
     raise RuntimeError("Kill state write conflict")
 
-def recover_agent(*, reviewer, reason):
-    """Recovery requires an authenticated admin route and a stopped hosted workload."""
-    if not reviewer or not reviewer.strip() or not reason or not reason.strip():
-        raise ValueError("Verified reviewer and recovery reason required")
-    container = get_approvals_container()
-    for _ in range(5):
-        current = get_kill_state()
-        if current is None or current.get("killed") is not True:
-            raise ValueError("Agent is not killed")
-        from uuid import uuid4
-        audit = {
-            "id": "kill-recovery-" + uuid4().hex,
-            "agentId": AGENT_ID, "type": "kill_recovery_audit",
-            "reviewer": reviewer.strip(), "reason": reason.strip(),
-            "previous_reason": current.get("reason"),
-            "previous_timestamp": current.get("timestamp"),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        container.create_item(body=audit)
-        current.update({
-            "killed": False, "reason": "ADMIN_RECOVERY",
-            "details": reason.strip(), "reviewer": reviewer.strip(),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        })
-        try:
-            return container.replace_item(
-                item=STATE_ID, body=current, etag=current["_etag"],
-                match_condition=MatchConditions.IfNotModified,
-            )
-        except exceptions.CosmosAccessConditionFailedError:
-            continue
-    raise RuntimeError("Recovery state write conflict")
