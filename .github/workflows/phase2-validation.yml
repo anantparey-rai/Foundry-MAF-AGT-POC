@@ -13,9 +13,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.14'
           cache: pip
       - run: python -m compileall -q agent governance approval_api.py
+      # Mirror the hosted Python runtime and bundle the required OPA executable.
+      # tools/opa is intentionally gitignored and must exist in the deployment package.
+      - run: bash scripts/prepare_opa.sh
+      - run: test -x tools/opa && tools/opa version
       - run: pip install -r requirements.txt
       # Pytest suite is under tests/. The scripts/test_*.py files are
       # standalone integration probes with top-level execution, not pytest modules.
