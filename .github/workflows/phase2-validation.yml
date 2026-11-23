@@ -17,4 +17,7 @@ jobs:
           cache: pip
       - run: python -m compileall -q agent governance approval_api.py
       - run: pip install -r requirements.txt
-      - run: python -m pytest -q
+      # Pytest suite is under tests/. The scripts/test_*.py files are
+      # standalone integration probes with top-level execution, not pytest modules.
+      - run: python -m pytest -q tests
+      - run: python scripts/test_combined_agent_path.py
