@@ -1,5 +1,6 @@
 import threading
 from governance.persistence.kill_repository import is_agent_killed, persist_kill
+from governance.persistence.security_events import record_security_event
 
 from agent_framework import (
     FunctionMiddleware,
@@ -52,6 +53,7 @@ class AutomaticRingBreachKillSwitch(FunctionMiddleware):
         ):
             details = "AGT ring-breach breaker already tripped"
             persist_kill("RING_BREACH", details)
+            record_security_event("RING_BREACH_KILL", "TERMINATE", reason=details, tool=tool_name, session_id=session_id)
             self.kill_switch.kill(
                 self.agent_did,
                 session_id,
@@ -94,11 +96,13 @@ class AutomaticRingBreachKillSwitch(FunctionMiddleware):
             if approved_execution:
                 details = f"Unauthorized ring execution: {tool_name}; {enforcement.reason}"
                 persist_kill("RING_BREACH", details)
+                record_security_event("RING_BREACH_KILL", "TERMINATE", reason=details, tool=tool_name, session_id=session_id)
                 self.kill_switch.kill(
                     self.agent_did, session_id,
                     KillReason.RING_BREACH, details=details
                 )
                 raise MiddlewareFailure(f"AGT automatic kill activated: {details}")
+            record_security_event("RING_ENFORCEMENT_DENIED", "DENY", reason=enforcement.reason, tool=tool_name, session_id=session_id)
             raise MiddlewareFailure(
                 f"AGT RingEnforcer denied {tool_name}: {enforcement.reason}"
             )
