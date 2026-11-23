@@ -8,6 +8,7 @@ from agent_control_specification import AgentControlBlocked
 
 from agent.agent import create_agent
 from governance.approval.store import list_pending
+from governance.persistence.security_events import record_security_event
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +169,7 @@ class GovernedHostedAgent:
         try:
             result = await self.acs.run({"body": body}, execute)
         except AgentControlBlocked as exc:
+            record_security_event('ACS_POLICY_DENIED', 'DENY', reason='ACS blocked request')
             return _blocked_response(exc)
         return result.value
 
@@ -203,6 +205,7 @@ class GovernedHostedAgent:
             result = await self.acs.run({"body": body}, execute)
             final_response = result.value
         except AgentControlBlocked as exc:
+            record_security_event('ACS_POLICY_DENIED', 'DENY', reason='ACS blocked request')
             updates.clear()  # Never replay buffered output after ACS denies.
             final_response = _blocked_response(exc)
 
