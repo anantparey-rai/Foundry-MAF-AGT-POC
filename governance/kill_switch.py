@@ -127,6 +127,7 @@ class AutomaticRingBreachKillSwitch(FunctionMiddleware):
             details = breach.details if breach else "AGT ring-breach breaker tripped."
             try:
                 persist_kill("RING_BREACH", details)
+                record_security_event("RING_BREACH_KILL", "TERMINATE", reason=details, tool=tool_name, session_id=session_id)
                 self.kill_switch.kill(
                     self.agent_did,
                     session_id,
