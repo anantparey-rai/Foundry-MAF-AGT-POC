@@ -23,6 +23,10 @@ from agent.hosted_adapter import create_hosted_agent
 
 app = FastAPI(title="AGT Approval API", docs_url=None, redoc_url=None)
 
+# Disabled by default; requires separate incident-admin secret and feature flag.
+from governance.incident_admin import router as incident_admin_router
+app.include_router(incident_admin_router)
+
 
 class DecisionRequest(BaseModel):
     decision: str
