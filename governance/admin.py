@@ -46,8 +46,10 @@ async def recovery_route(request: Request):
         return blocked
     # A durable recovery request must not silently restart or override a
     # terminated in-memory agent. Stop all hosted replicas first.
-    if os.getenv("AGT_RECOVERY_WORKLOAD_STOPPED", "").lower() != "true":
-        return JSONResponse({"error": "Stop hosted workload and set recovery gate before recovery"}, status_code=409)
+    return JSONResponse({"error": "Online recovery intentionally disabled: stop the hosted workload and perform audited offline recovery before restarting"}, status_code=409)
+
+async def _unused_offline_recovery_route(request: Request):
+    """Reserved for offline-only maintenance; not registered as a route."""
     try:
         body = await request.json()
         reviewer, reason = body.get("reviewer"), body.get("reason")
