@@ -86,6 +86,8 @@ class GovernedMAFAgent:
 
         @wraps(function)
         async def governed_tool(**kwargs):
+            if self.kill_switch_middleware.terminated.is_set() or is_agent_killed():
+                raise RuntimeError("AGT kill switch: agent terminated")
             try:
                 result = await protected(kwargs)
                 return result.value
@@ -115,6 +117,8 @@ class GovernedMAFAgent:
         return governed_tool
 
     async def run(self, message):
+        if self.kill_switch_middleware.terminated.is_set() or is_agent_killed():
+            raise RuntimeError("AGT kill switch: agent terminated")
         result = await self.acs.run(
             {"body": message},
             lambda effective_input: self.agent.run(effective_input["body"]),
@@ -129,6 +133,9 @@ class GovernedMAFAgent:
 
         if item is None:
             raise ValueError("Pending approval not found")
+
+        if is_agent_killed() and decision == "allow":
+            raise ValueError("Agent is suspended; approval cannot execute")
 
         if not set_decision(request_id, decision, reviewer):
             raise ValueError("Approval request is no longer pending")
@@ -213,17 +220,22 @@ class GovernedMAFAgent:
                 "result": result.value,
             }
 
-        except AgentControlBlocked:
-            from governance.persistence.approval_repository import get_approval
-
+        except BaseException:
+            # The ACS replay may fail before the tool is claimed. Never leave
+            # a reusable "allow" authorization after an unsuccessful replay.
+            from governance.persistence.approval_repository import (
+                get_approval, transition_approval,
+            )
             record = get_approval(request_id)
+            if record and record.get("status") == "allow":
+                transition_approval(request_id, "allow", "failed")
             if record and record.get("status") == "executed":
                 raise RuntimeError(
-                    "Tool executed, but ACS post-tool enforcement blocked "
-                    "the result. Manual reconciliation required."
+                    "Tool executed, but post-execution governance failed; "
+                    "manual reconciliation required"
                 )
-
             raise
+
 
 
 def create_agent():

@@ -48,6 +48,37 @@ def pending():
     }
 
 
+def _verify_reviewer(secret: str | None):
+    import hmac
+    expected = os.environ.get("DEMO_REVIEWER_SECRET")
+    if not expected:
+        raise HTTPException(status_code=503, detail="Reviewer access not configured")
+    if not secret or not hmac.compare_digest(secret, expected):
+        raise HTTPException(status_code=403, detail="Reviewer access denied")
+
+
+@app.get("/kill-switch/status")
+def kill_status():
+    from governance.persistence.kill_repository import get_kill_status
+    return get_kill_status()
+
+
+@app.post("/kill-switch/manual")
+def manual_kill(body: dict, x_demo_reviewer_secret: str | None = Header(default=None)):
+    _verify_reviewer(x_demo_reviewer_secret)
+    if type(body.get("killed")) is not bool:
+        raise HTTPException(status_code=400, detail="killed must be a boolean")
+    from governance.persistence.kill_repository import set_manual_kill
+    import logging
+    try:
+        result = set_manual_kill(body["killed"], "poc-demo-reviewer")
+        logging.warning("GOVERNANCE_MANUAL_KILL reviewer=%s requested=%s effective=%s",
+                        "poc-demo-reviewer", body["killed"], result["killed"])
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+
+
 @app.post("/approvals/{request_id}/decision")
 async def decision(
     request_id: str,
@@ -71,12 +102,18 @@ async def decision(
 
     try:
         agent = create_hosted_agent()
-        return await agent.resolve_approval(
+        result = await agent.resolve_approval(
             request_id,
             decision_map[body.decision],
             "poc-demo-reviewer",
         )
+        import logging
+        logging.warning("GOVERNANCE_APPROVAL_DECISION request_id=%s decision=%s outcome=%s reviewer=%s",
+                        request_id, body.decision, result.get("status"), "poc-demo-reviewer")
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except Exception:
+        import logging
+        logging.exception("APPROVAL_EXECUTION_FAILED")
         raise HTTPException(status_code=500, detail="Governed approval execution failed")

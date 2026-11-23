@@ -1,10 +1,28 @@
 from collections.abc import Mapping, Sequence
 from typing import Any
+import json
+import logging
 
-from agent_framework import ResponseStream
+from agent_framework import AgentResponse, Message, ResponseStream
+from agent_control_specification import AgentControlBlocked
 
 from agent.agent import create_agent
 from governance.approval.store import list_pending
+
+logger = logging.getLogger(__name__)
+
+
+def _blocked_response(exc: AgentControlBlocked) -> AgentResponse:
+    # Do not expose raw policy internals or the rejected prompt to the caller.
+    logger.warning("GOVERNANCE_POLICY_BLOCKED %s", json.dumps({
+        "event": "governance_policy_blocked",
+        "exception_type": type(exc).__name__,
+        "decision": "deny",
+    }))
+    return AgentResponse(messages=[Message(
+        role="assistant",
+        contents=["Request blocked by AI Governance policy. No action was executed."],
+    )])
 
 
 def _extract_text(value: Any) -> str:
@@ -145,7 +163,10 @@ class GovernedHostedAgent:
                 client_kwargs=client_kwargs,
             )
 
-        result = await self.acs.run({"body": body}, execute)
+        try:
+            result = await self.acs.run({"body": body}, execute)
+        except AgentControlBlocked as exc:
+            return _blocked_response(exc)
         return result.value
 
     async def _run_stream(
@@ -170,8 +191,12 @@ class GovernedHostedAgent:
 
         # Buffer the entire stream. ACS output enforcement completes
         # before any response update is released to the hosted server.
-        result = await self.acs.run({"body": body}, execute)
-        final_response = result.value
+        try:
+            result = await self.acs.run({"body": body}, execute)
+            final_response = result.value
+        except AgentControlBlocked as exc:
+            updates.clear()  # Never replay buffered output after ACS denies.
+            final_response = _blocked_response(exc)
 
         async def replay():
             for update in updates:
