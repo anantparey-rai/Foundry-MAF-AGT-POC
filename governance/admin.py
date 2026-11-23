@@ -3,7 +3,7 @@ import hmac
 import os
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from governance.persistence.kill_repository import get_kill_state, is_agent_killed, recover_agent
+from governance.persistence.kill_repository import get_kill_state, is_agent_killed
 
 def _authorized(request: Request) -> bool:
     secret = os.getenv("AGT_ADMIN_SECRET", "")
