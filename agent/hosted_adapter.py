@@ -8,11 +8,12 @@ from agent_control_specification import AgentControlBlocked
 
 from agent.agent import create_agent
 from governance.approval.store import list_pending
+from governance.persistence.security_events import record_security_event
 
 logger = logging.getLogger(__name__)
 
 
-def _blocked_response(exc: AgentControlBlocked) -> AgentResponse:
+def _blocked_response(exc: Exception) -> AgentResponse:
     # Do not expose raw policy internals or the rejected prompt to the caller.
     logger.warning("GOVERNANCE_POLICY_BLOCKED %s", json.dumps({
         "event": "governance_policy_blocked",
@@ -154,6 +155,8 @@ class GovernedHostedAgent:
     async def _run_non_stream(
         self, body, session, function_invocation_kwargs, client_kwargs, options
     ):
+        if not self.governed.screen_input(body):
+            return _blocked_response(PermissionError("AGT input governance denied"))
         async def execute(effective_input):
             return await self.agent.run(
                 effective_input["body"],
@@ -166,12 +169,19 @@ class GovernedHostedAgent:
         try:
             result = await self.acs.run({"body": body}, execute)
         except AgentControlBlocked as exc:
+            record_security_event('ACS_POLICY_DENIED', 'DENY', reason='ACS blocked request')
             return _blocked_response(exc)
         return result.value
 
     async def _run_stream(
         self, body, session, function_invocation_kwargs, client_kwargs, options
     ):
+        if not self.governed.screen_input(body):
+            blocked = _blocked_response(PermissionError("AGT input governance denied"))
+            async def empty_stream():
+                if False:
+                    yield None
+            return ResponseStream(empty_stream(), finalizer=lambda _: blocked)
         updates = []
 
         async def execute(effective_input):
@@ -195,6 +205,7 @@ class GovernedHostedAgent:
             result = await self.acs.run({"body": body}, execute)
             final_response = result.value
         except AgentControlBlocked as exc:
+            record_security_event('ACS_POLICY_DENIED', 'DENY', reason='ACS blocked request')
             updates.clear()  # Never replay buffered output after ACS denies.
             final_response = _blocked_response(exc)
 

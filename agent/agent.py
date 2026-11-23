@@ -1,4 +1,10 @@
 ﻿import os
+import json
+import logging
+import math
+import inspect
+
+from agent_os.prompt_injection import PromptInjectionDetector, DetectionConfig
 from functools import wraps
 
 from dotenv import load_dotenv
@@ -7,6 +13,7 @@ from agent_framework import Agent
 from agent_framework.foundry import FoundryChatClient
 from governance.kill_switch import AutomaticRingBreachKillSwitch
 from governance.persistence.kill_repository import is_agent_killed
+from governance.persistence.security_events import record_security_event
 
 from agent_control_specification import (
     AgentControl,
@@ -24,6 +31,7 @@ from governance.approval.store import (
 
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 
 class GovernedMAFAgent:
@@ -36,6 +44,8 @@ class GovernedMAFAgent:
             raise ValueError(
                 "AZURE_AI_PROJECT_ENDPOINT is missing from environment"
             )
+
+        self.prompt_injection_detector = PromptInjectionDetector(DetectionConfig(sensitivity="balanced"))
 
         self.acs = AgentControl.from_path(
             "governance/policies/acs/manifest.yaml"
@@ -77,6 +87,23 @@ class GovernedMAFAgent:
             middleware=[self.kill_switch_middleware],
         )
 
+    @staticmethod
+    def validate_tool_call(name, function, arguments):
+        """ASI02: reject unknown/invalid tool calls before ACS and on approval replay."""
+        if name not in TOOL_FUNCTIONS or TOOL_FUNCTIONS[name] is not function:
+            raise PermissionError("ASI02: tool is not registered")
+        if not isinstance(arguments, dict):
+            raise ValueError("ASI02: tool arguments must be an object")
+        inspect.signature(function).bind(**arguments)
+        for key, value in arguments.items():
+            if isinstance(value, str) and (not value.strip() or len(value) > 4096):
+                raise ValueError(f"ASI02: invalid {key}")
+            if key in {"amount", "loan_amount"}:
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                    raise ValueError(f"ASI02: invalid {key}")
+            if key == "loan_term_months" and (isinstance(value, bool) or not isinstance(value, int) or value <= 0):
+                raise ValueError("ASI02: invalid loan term")
+
     def _create_governed_tool(self, name, function):
         protected = self.acs.protect_tool(
             name,
@@ -89,6 +116,7 @@ class GovernedMAFAgent:
             if self.kill_switch_middleware.terminated.is_set() or is_agent_killed():
                 raise RuntimeError("AGT kill switch: agent terminated")
             try:
+                self.validate_tool_call(name, function, kwargs)
                 result = await protected(kwargs)
                 return result.value
             except AgentControlSuspended as exc:
@@ -116,7 +144,33 @@ class GovernedMAFAgent:
         )
         return governed_tool
 
+    def screen_input(self, message):
+        """AGT LLM01 detection, with explicit fail-closed enforcement (also ASI01 signal)."""
+        try:
+            result = self.prompt_injection_detector.detect(message, source="foundry_hosted_input")
+            blocked = bool(result.is_injection)
+            if blocked:
+                record_security_event(
+                    "PROMPT_INJECTION_DETECTED", "DENY",
+                    threat_level=result.threat_level.value,
+                    injection_type=result.injection_type.value if result.injection_type else None,
+                    confidence=result.confidence,
+                )
+            logger.warning("AGT_PROMPT_INJECTION %s", json.dumps({
+                "blocked": blocked,
+                "threat_level": result.threat_level.value,
+                "injection_type": result.injection_type.value if result.injection_type else None,
+                "confidence": result.confidence,
+            })) if blocked else None
+            return not blocked
+        except Exception:
+            logger.exception("AGT_PROMPT_INJECTION detector unavailable; fail closed")
+            record_security_event("PROMPT_INJECTION_DETECTOR_ERROR", "DENY", reason="Detector unavailable; fail closed")
+            return False
+
     async def run(self, message):
+        if not self.screen_input(message):
+            raise PermissionError("Request blocked by AGT prompt injection governance")
         if self.kill_switch_middleware.terminated.is_set() or is_agent_killed():
             raise RuntimeError("AGT kill switch: agent terminated")
         result = await self.acs.run(
@@ -149,6 +203,7 @@ class GovernedMAFAgent:
             }
 
         function = TOOL_FUNCTIONS[tool_name]
+        self.validate_tool_call(tool_name, function, item.arguments)
 
         tool_call = item.policy_input["snapshot"]["tool_call"]
         tool_call_id = tool_call.get("id")
