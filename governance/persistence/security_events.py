@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 def record_security_event(event_type, decision, reason=None, **attributes):
     allowed = {"PROMPT_INJECTION_DETECTED", "PROMPT_INJECTION_DETECTOR_ERROR",
-               "RING_ENFORCEMENT_DENIED", "RING_BREACH_KILL"}
+               "RING_ENFORCEMENT_DENIED", "RING_BREACH_KILL", "ACS_POLICY_DENIED"}
     if event_type not in allowed:
         raise ValueError("Unsupported security event type")
     doc = {
