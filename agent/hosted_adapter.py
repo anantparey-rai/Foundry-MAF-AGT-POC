@@ -5,6 +5,7 @@ from agent_framework import ResponseStream
 
 from agent.agent import create_agent
 from governance.approval.store import list_pending
+from governance.persistence.kill_repository import is_agent_killed
 
 
 def _extract_text(value: Any) -> str:
@@ -112,6 +113,9 @@ class GovernedHostedAgent:
         options=None,
         **kwargs,
     ):
+        # Durable agent-wide kill gate applies before any LLM invocation.
+        if self.governed.kill_switch_middleware.terminated.is_set() or is_agent_killed():
+            raise RuntimeError("AGT kill switch: agent terminated")
         body = _messages_to_text(messages)
 
         if stream:
@@ -136,6 +140,8 @@ class GovernedHostedAgent:
     async def _run_non_stream(
         self, body, session, function_invocation_kwargs, client_kwargs, options
     ):
+        if self.governed.kill_switch_middleware.terminated.is_set() or is_agent_killed():
+            raise RuntimeError("AGT kill switch: agent terminated")
         async def execute(effective_input):
             return await self.agent.run(
                 effective_input["body"],
@@ -151,6 +157,8 @@ class GovernedHostedAgent:
     async def _run_stream(
         self, body, session, function_invocation_kwargs, client_kwargs, options
     ):
+        if self.governed.kill_switch_middleware.terminated.is_set() or is_agent_killed():
+            raise RuntimeError("AGT kill switch: agent terminated")
         updates = []
 
         async def execute(effective_input):
