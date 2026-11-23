@@ -13,6 +13,7 @@ from agent_framework import Agent
 from agent_framework.foundry import FoundryChatClient
 from governance.kill_switch import AutomaticRingBreachKillSwitch
 from governance.persistence.kill_repository import is_agent_killed
+from governance.persistence.security_events import record_security_event
 
 from agent_control_specification import (
     AgentControl,
@@ -148,6 +149,13 @@ class GovernedMAFAgent:
         try:
             result = self.prompt_injection_detector.detect(message, source="foundry_hosted_input")
             blocked = bool(result.is_injection)
+            if blocked:
+                record_security_event(
+                    "PROMPT_INJECTION_DETECTED", "DENY",
+                    threat_level=result.threat_level.value,
+                    injection_type=result.injection_type.value if result.injection_type else None,
+                    confidence=result.confidence,
+                )
             logger.warning("AGT_PROMPT_INJECTION %s", json.dumps({
                 "blocked": blocked,
                 "threat_level": result.threat_level.value,
@@ -157,6 +165,7 @@ class GovernedMAFAgent:
             return not blocked
         except Exception:
             logger.exception("AGT_PROMPT_INJECTION detector unavailable; fail closed")
+            record_security_event("PROMPT_INJECTION_DETECTOR_ERROR", "DENY", reason="Detector unavailable; fail closed")
             return False
 
     async def run(self, message):
