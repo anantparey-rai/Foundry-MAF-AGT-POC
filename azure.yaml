@@ -29,3 +29,13 @@ services:
     poc-proj:
         endpoint: https://foundrypoc2.services.ai.azure.com/api/projects/POC-proj
         host: azure.ai.project
+
+hooks:
+    predeploy:
+        shell: sh
+        run: |
+            set -eu
+            mkdir -p tools
+            curl --fail --location --retry 3 --silent --show-error --output tools/opa https://github.com/open-policy-agent/opa/releases/download/v1.22.4/opa_linux_amd64_static
+            chmod 755 tools/opa
+            tools/opa version
