@@ -20,7 +20,8 @@ isolated = ast.fix_missing_locations(ast.Module(body=[
     ast.ClassDef(name="GovernedMAFAgent", bases=[], keywords=[], body=methods, decorator_list=[])
 ], type_ignores=[]))
 scope = {"json": json, "logger": logging.getLogger("offline-governance"),
-         "is_agent_killed": lambda: False}
+         "is_agent_killed": lambda: False,
+         "record_security_event": lambda *args, **kwargs: None}
 exec(compile(isolated, "agent/agent.py:isolated", "exec"), scope)
 Agent = scope["GovernedMAFAgent"]
 
