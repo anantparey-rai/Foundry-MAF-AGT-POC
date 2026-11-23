@@ -1,7 +1,7 @@
 name: Phase 2 backend validation
 on:
   push:
-    branches: [poc/hitl-kill-integration]
+    branches: [poc/hitl-kill-integration, poc/llm01-asi01-asi02-hardening]
   pull_request:
   workflow_dispatch:
 permissions:
