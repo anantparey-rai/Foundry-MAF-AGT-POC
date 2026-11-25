@@ -115,6 +115,8 @@ class GovernedMAFAgent:
         return governed_tool
 
     async def run(self, message):
+        if self.kill_switch_middleware.terminated.is_set() or is_agent_killed():
+            raise RuntimeError("AGT kill switch: agent terminated")
         result = await self.acs.run(
             {"body": message},
             lambda effective_input: self.agent.run(effective_input["body"]),
@@ -122,6 +124,8 @@ class GovernedMAFAgent:
         return result.value
 
     async def resolve_approval(self, request_id, decision, reviewer):
+        if self.kill_switch_middleware.terminated.is_set() or is_agent_killed():
+            raise RuntimeError("AGT kill switch: agent terminated")
         if decision not in ("allow", "deny"):
             raise ValueError("Decision must be allow or deny")
 

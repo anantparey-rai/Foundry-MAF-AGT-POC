@@ -55,6 +55,7 @@ from agent.hosted_adapter import create_hosted_agent
 
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from governance.admin import test_ring_breach_route, recovery_route
 
 
 server = ResponsesHostServer(agent=create_hosted_agent, history_source="agent")
@@ -118,6 +119,8 @@ server.add_route(
     methods=["POST"],
 )
 
+server.add_route("/admin/test/ring-breach", test_ring_breach_route, methods=["POST"])
+server.add_route("/admin/recovery", recovery_route, methods=["POST"])
 
 
 if __name__ == "__main__":
